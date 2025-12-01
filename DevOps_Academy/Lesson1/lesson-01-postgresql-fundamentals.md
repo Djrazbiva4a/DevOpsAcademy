@@ -490,16 +490,67 @@ A snapshot that can be shared with other transactions, allowing them to see the 
 **Real-world analogy:** Like taking a photo of a scene - everyone who gets a copy of that photo sees the same thing, even if the actual scene changes.
 
 **Example use case:**
-```sql
--- Transaction 1: Export a snapshot
-BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-SELECT pg_export_snapshot();  -- Returns: '00000003-00000001-1'
 
--- Transaction 2: Use that snapshot
+**IMPORTANT:** Snapshots require **separate database connections/sessions**. You cannot use them in the same psql session. You need to open two separate terminal windows or use two separate database connections.
+
+**Session 1 (Terminal Window 1):**
+```sql
+-- Start a transaction with REPEATABLE READ isolation
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-SET TRANSACTION SNAPSHOT '00000003-00000001-1';
--- Now Transaction 2 sees the same data as Transaction 1 did
+
+-- Export the snapshot (get the snapshot ID)
+SELECT pg_export_snapshot();
+-- Returns something like: '00000003-00000212-1'
+-- COPY THIS VALUE - you'll need it for Session 2
+
+-- Do some work
+SELECT * FROM customers WHERE id = 1;
+-- ... make some changes or just read data ...
 ```
+
+**Session 2 (Terminal Window 2 - NEW CONNECTION):**
+```sql
+-- Start a transaction and immediately set the snapshot
+-- CRITICAL: SET TRANSACTION SNAPSHOT must be the FIRST command after BEGIN
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+SET TRANSACTION SNAPSHOT '00000003-00000212-1';  -- Use the snapshot ID from Session 1
+
+-- Now this transaction sees the same data as Session 1 did when it exported the snapshot
+SELECT * FROM customers WHERE id = 1;
+-- This will see the same data, even if Session 1 makes changes
+```
+
+**How to test this:**
+
+1. **Open Terminal 1:**
+```bash
+docker exec -it my-postgres psql -U postgres -d mydb
+```
+
+2. **In Terminal 1, run:**
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+SELECT pg_export_snapshot();
+-- Copy the snapshot ID that's returned
+```
+
+3. **Open Terminal 2 (new terminal window):**
+```bash
+docker exec -it my-postgres psql -U postgres -d mydb
+```
+
+4. **In Terminal 2, run:**
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+SET TRANSACTION SNAPSHOT 'PASTE_SNAPSHOT_ID_HERE';
+-- Now you can query and see the same data as Terminal 1
+```
+
+**Key Points:**
+- ✅ Requires **separate database connections** (different terminal windows)
+- ✅ `SET TRANSACTION SNAPSHOT` must be the **first command** after `BEGIN`
+- ✅ Both transactions must use `REPEATABLE READ` or `SERIALIZABLE` isolation level
+- ✅ The snapshot ID is only valid while the exporting transaction is still active
 
 **What's inside:**
 - Exported snapshot files
